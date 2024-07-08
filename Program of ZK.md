@@ -25,10 +25,10 @@ flowchart TD
 
 # 回顾: ZKP for a predicate $\phi$
 
-让我们回忆一下ZKP做了什么。假设你有一个谓词 $\phi$，有一些公共输入 $x$ 和私有输入（见证）$w$。例如，$\phi =$ 我知道一个 $w$，使得 $x = \text{SHA256}(w)$。
+让我们回忆一下ZKP做了什么。假设你有一个谓词 $\phi$，有一些公共输入 $x$ 和私有输入（见证）$w$。例如，$\phi$ = 我知道一个 $w$，使得 $x = \text{SHA256}(w)$。
 
-- 证明者可以访问$\phi, x, w$.
-- 验证者可以访问 $\phi, x$.
+- 证明者可以访问$\phi$, $x, w$.
+- 验证者可以访问 $\phi$, $x$.
 - 证明 $\pi$ 将证明 $\phi(x, w)$ 成立，而不透露 $w$
 
 然而，关键问题是：$\phi$ 可以是什么？还有其他例子吗？理论上，$\phi$ 可以是任何NP问题语句。
@@ -58,18 +58,7 @@ flowchart TD
 
 以下是上述两个多项式的电路，可视化为DAG:
 
-```mermaid
-flowchart LR
-	w0((w_0)) --> x1[x]
-	w0 --> x1[x]
-	x1 --> x2[x]
-	w0 --> x2[x]
-	w1((w_1)) --> x3[x]
-	w1 --> x3[x]
-	x --> =2
-	x2 --> =1[=]
-	x((x)) --> =1
-	x3 --> =2[=]
+![alt text](image.png)
 ```
 
 ## Rank-1 Constraint System (R1CS)
@@ -116,17 +105,7 @@ $$
 
 考虑以下AC：
 
-```mermaid
-flowchart LR
-	w0((w_0)) --> m1[x]
-	w1((w_1)) --> m1
-	w1 --> m2
-	x0((x_0)) --> a1
-	m1 --w_2--> a1[+]
-	x0 --> m2[x]
-	a1 --w_3--> =
-	m2 --w_4--> =
-```
+![alt text](image-1.png)
 
 这里，我们有一个公共输入 $x_0$ 和两个秘密输入（见证）$w_0, w_1$。我们首先要做的是通过分配给它们秘密输入变量来捕获中间输出；在这种情况下，这些将是 $w_2, w_3, w_4$。然后，我们只需按照之前讨论的形式 $\alpha \times \beta = \gamma$ 写方程，每个门一个方程!
 
@@ -383,4 +362,142 @@ component main{public[puzzle]} = Sudoku(9);
 
 ```
 Circom 很棒，并且对约束有直接控制。然而，使用自定义语言也有其自身的缺点。一种替代方案是使用已知的高级语言（例如Rust、Go）并有一个库帮助你在其中编写电路.
+
+# 教程：Arkworks - 使用一个库
+
+在一个库中，最重要的对象将是约束系统。这个对象将保留关于R1CS约束和变量的状态，我们在编写“电路”时会与它进行交互。
+
+这里的关键操作是：
+
+- 创建一个变量
+
+```rust
+cs.add_var(p, v) -> id;
+// cs: 约束系统
+// p: 变量的可见性
+// v: 分配的值
+// id: 变量句柄
+```
+- 创建变量的线性组合
+```rust
+// 首先创建一个空的线性组合
+lc := cs.zero();
+// 现在填充它的变量
+lc.add(c, id) -> lc';
+// id: 之前的变量句柄
+// c: 系数
+// 这对应于以下线性组合:
+//   lc' := lc + c * id
+```
+- 添加一个约束
+```rust
+// 假设你有一些线性约束 lc_A, lc_B, lc_C
+cs.constraint(lc_A, lc_B, lc_C)
+// 添加约束 lc_A * lc_B = lc_C
+```
+
+这些操作是比较高层的，所以我们来看一个更实际的例子。
+```rust
+fn and(cs: ConstraintSystem, a: Var, b: Var) -> Var {
+  // 对值进行简单的按位与操作
+  let result = cs.new_witness_var(|| a.value() & b.value());
+  // 约束：a * b = result，类似于布尔运算中的与
+  self.cs.enforce_constraint(
+    lc!() + a,
+    lc!() + b,
+    lc!() + result,
+  );
+  result // 返回新的结果作为 Var
+}
+```
+这非常酷，但它有相当多的样板代码，并且看起来非常繁琐且容易出错。所以，我们真的希望有某种语言抽象，使库更友好。
+
+这里是一个示例，我们可以编写相同的代码，但将其应用于一个 Boolean 结构体并重载 and 操作符。
+
+```rust
+struct Boolean { var: Var };
+
+impl BitAnd for Boolean {
+  fn and(self: Boolean, other: Boolean) -> Boolean {
+   // 执行上述相同的代码...
+    Boolean { var: result } // 返回用 Boolean 包装的结果
+  }
+}
+
+// 稍后在代码中，你可以这样做：
+let a = Boolean::new_witness(|| true);
+let b = Boolean::new_witness(|| false);
+```
+有许多不同的库:
+
+- [libsnark](https://github.com/scipr-lab/libsnark): gadgetlib (C++)
+- [arkworks](https://github.com/arkworks-rs): r1cs-std + crypto-primitives (Rust)
+- [Snarky](https://github.com/o1-labs/snarky) (OCaml)
+- [GNARK](https://github.com/ConsenSys/gnark) (Go)
+- Bellman (Rust)
+- PLONKish (Rust)
+
+# 教程：ZoKrates - 将程序编译成电路
+
+在 Circom 示例中，我们自己编写了电路。在 Arkworks 示例中，我们使用了一个很好的高级语言，但仍然需要显式指定线路和约束。如果我们可以有一种编程语言，它可以接收一个程序并将其编译成带有所有电线和约束的 R1CS，这是不是很酷
+
+了解一下 ZoKrates，这个工具做了我们刚刚描述的事情。
+
+```rust
+type F = field;
+
+def multiplication(public F x, private F[2] ys) {
+  field y0 = y[0];
+  field y1 = y[1];
+  assert(x = y0 * y1);
+}
+
+def repeated_squaring<N>(field x) -> field {
+  field[N] mut xs;
+  xs[0] = x;
+  for u32 i in 0..n {
+    xs[i + 1] = xs[i] * xs[i];
+  }
+  return xs[N];
+}
+
+def main (public field x) -> field {
+  repeated_squaring::<1000>(x);
+}
+```
+
+ZoKrates 有很多功能：
+
+- 通过结构体自定义类型
+- 在执行/证明期间包含值的变量
+- 可见性是注释的（私有/公共）
+- assert 创建约束
+- 整数泛型 <N> 
+- 数组和数组访问
+- If-else 语句
+
+I am omitting the example from this page, please see the lecture for the code.
+
+# 回顾：ZKP 工具链
+
+我们已经看到，一般有 3 个选项:
+
+- **HDL**: 描述电路综合的语言.
+  - **优点**: 清晰的约束和优雅的语法
+  - **缺点**: 难以学习和有限的抽象
+- **Library**: 描述电路综合的库
+  - **优点**: 清晰的约束
+  - **缺点**: 需要了解该语言和很少的优化
+- **PL + Compiler**: 一种语言，编译成电路
+  - **优点**: 最容易学习和优雅的语法
+  - **缺点**: 有限的见证计算
+
+|         | 不是独立语言 | 是独立语言 |
+| ------- | -------------------------- | ------------------------ |
+| 电路 | 库 (Arkworks)         | HDL (Circom)            |
+| 程序|                            | PL (ZoKrates)            |
+
+最后您可以查看 https://zkp.science/，它涵盖了许多工具以及ZK理论的发展。
+
+
 
